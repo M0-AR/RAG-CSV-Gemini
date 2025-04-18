@@ -1,5 +1,11 @@
-streamlit
-langchain
-langchain_community
-langchain_ollama
-chromadb
+streamlit==1.29.0
+chromadb==0.6.3
+langchain==0.1.16
+langchain-core==0.1.52
+langchain_community>=0.0.32,<0.1.0
+langchain-google-genai==1.0.1
+sentence-transformers==4.1.0
+huggingface-hub==0.30.2
+pandas==2.2.1
+python-dotenv==1.0.0
+# pypdf - Removed as we are loading from CSV

@@ -1,95 +1,117 @@
 import streamlit as st
+import os
 from langchain_community.vectorstores import Chroma
-from langchain_ollama import OllamaEmbeddings
+from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama.llms import OllamaLLM
-import re
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_google_genai import ChatGoogleGenerativeAI
+from dotenv import load_dotenv
 
-# Constants
-CHROMA_DB_PATHS = {
-    "Mobily": "./chroma_db_mobily",
-    "Caterpillar": "./chroma_db_caterpillar"
-}
-PROMPT_TEMPLATE = """
-You are an expert research assistant. Use the provided context to answer the query. 
-If unsure, state that you don't know. Be concise and factual (max 3 sentences).
+# Load environment variables
+load_dotenv()
 
-Query: {user_query} 
-Context: {document_context} 
+google_api_key = os.environ.get("GOOGLE_API_KEY")
+google_api_model = os.environ.get("GOOGLE_API_MODEL", "gemini-1.5-flash") # Default model if not set
+
+if not google_api_key:
+    st.error("GOOGLE_API_KEY not found. Please ensure it's set in the .env file.")
+    st.stop()
+
+# --- Configuration ---
+VECTOR_DB_PERSIST_DIR = "./chroma_db_wateen"
+COLLECTION_NAME = "ai_tools_wateen"
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+
+# Check if vector store exists
+if not os.path.exists(VECTOR_DB_PERSIST_DIR):
+    st.error(f"Vector store not found at {VECTOR_DB_PERSIST_DIR}. Please run embeddings.py first to generate embeddings.")
+    st.stop()
+
+# --- Initialize Components ---
+st.set_page_config(page_title="Chat with AI Tools CSV Data", page_icon=":robot_face:")
+st.title("Chat with AI Tools Data")
+st.write("Ask questions about the AI tools detailed in the CSV file[https://github.com/M0-AR/ai-business-matcher/blob/main/ai_tools_detailed.csv].")
+
+@st.cache_resource # Cache resources for efficiency
+def load_components():
+    try:
+        # Embeddings
+        embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+
+        # Vector Store (load existing)
+        vectorstore = Chroma(
+            persist_directory=VECTOR_DB_PERSIST_DIR,
+            embedding_function=embeddings,
+            collection_name=COLLECTION_NAME
+        )
+        retriever = vectorstore.as_retriever(search_kwargs={'k': 3000}) # Retrieve top 1000 relevant chunks
+
+        # LLM (Google Gemini)
+        llm = ChatGoogleGenerativeAI(model=google_api_model, google_api_key=google_api_key, temperature=0.2)
+
+        # Prompt Template
+        template = """
+You are an assistant for question-answering tasks about AI tools from a comprehensive database of over 3300 AI tools.
+Use the following pieces of retrieved context to answer the question.
+If you don't know the answer, just say that you don't know.
+
+For questions about specific categories of tools (like marketing, coding, etc.), try to provide a comprehensive answer.
+For questions about counts or statistics, be honest about what you can determine from the context provided.
+
+Question: {question}
+
+Context: {context}
+
 Answer:
 """
-EMBEDDING_MODEL = OllamaEmbeddings(model="deepseek-r1:1.5b")
-LANGUAGE_MODEL = OllamaLLM(model="deepseek-r1:1.5b")
+        prompt = ChatPromptTemplate.from_template(template)
 
+        return retriever, llm, prompt
+    except Exception as e:
+        st.error(f"Error loading components: {e}")
+        st.exception(e)
+        return None, None, None
 
-def get_chroma_instance(selected_db):
-    """Load ChromaDB based on the selected database."""
-    return Chroma(
-        persist_directory=CHROMA_DB_PATHS[selected_db],
-        collection_name="documents",
-        embedding_function=EMBEDDING_MODEL
-    )
+retriever, llm, prompt = load_components()
 
+if not all([retriever, llm, prompt]):
+    st.warning("Failed to initialize necessary components. Cannot proceed.")
+    st.stop()
 
-def find_related_documents(chroma_db, query):
-    """Retrieve relevant documents using similarity search."""
-    return chroma_db.similarity_search(query, k=5)
+# --- RAG Chain Definition ---
+rag_chain = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
 
+# --- Chat Interface ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-def generate_answer(user_query, context_documents):
-    """Generate AI response using retrieved documents."""
-    context_text = "\n\n".join([doc.page_content for doc in context_documents])
-    conversation_prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
-    response_chain = conversation_prompt | LANGUAGE_MODEL
-    return response_chain.invoke({"user_query": user_query, "document_context": context_text})
+# Display chat messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-
-def format_think_section(response):
-    """
-    Replaces all occurrences of '.\n' with '.*' only within the <think>...</think> tags.
-    """
-    def replace_first_last_with_star(s):
-        """
-        Replaces the first and last characters of a string with '*'.
-        """
-        if not s:  # Handle empty string
-            return s
-        # Replace first character
-        s = "*" + s[1:]
-        # Replace last character if the string has more than one character
-        if len(s) > 1:
-            s = s[:-1] + "*"
-        return s
-
-
-    def replace_dot_newline(match):
-        content = match.group(1)  # Extract content inside <think>...</think>
-        content = replace_first_last_with_star(content)
-        modified_content = re.sub(r'\.\n\n', '.*\n\n*', content)  # Replace '.\n' with '.*'
-        return f"<think>{modified_content}</think>"
-
-    return re.sub(r"<think>(.*?)</think>", replace_dot_newline, response, flags=re.DOTALL)
-
-# UI Configuration
-st.title("📘 Test Task")
-st.markdown("### RAG Chatbot for Mobily and Caterpillar PDFs")
-st.markdown("##### Note: The text within the <think> tags shows the thought process of the RAG Chatbot")
-st.markdown("---")
-
-# Select ChromaDB
-selected_db = st.selectbox("Select Knowledge Base", options=list(CHROMA_DB_PATHS.keys()))
-chroma_db = get_chroma_instance(selected_db)
-
-user_input = st.chat_input("Ask a question about your documents...")
-
-if user_input:
+# Accept user input
+if query := st.chat_input("Ask a question about the AI tools:"):
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": query})
+    # Display user message in chat message container
     with st.chat_message("user"):
-        st.write(user_input)
+        st.markdown(query)
 
-    with st.spinner(f"Searching in {selected_db}..."):
-        relevant_docs = find_related_documents(chroma_db, user_input)
-        ai_response = generate_answer(user_input, relevant_docs)
-        ai_response = format_think_section(ai_response)
-
-    with st.chat_message("assistant", avatar="🤖"):
-        st.write(ai_response)
+    # Display assistant response in chat message container
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            try:
+                response = rag_chain.invoke(query)
+                st.markdown(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
+            except Exception as e:
+                error_msg = f"An error occurred while processing your request: {e}"
+                st.error(error_msg)
+                st.session_state.messages.append({"role": "assistant", "content": f"Error: {error_msg}"})

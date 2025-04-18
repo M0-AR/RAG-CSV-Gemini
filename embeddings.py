@@ -1,73 +1,72 @@
 import streamlit as st
-from langchain_community.document_loaders import PDFPlumberLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+import os
+from langchain_community.document_loaders import CSVLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
-from langchain_ollama import OllamaEmbeddings
-import chromadb
-from chromadb.utils import embedding_functions
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from dotenv import load_dotenv
 
+# Load environment variables from .env file
+load_dotenv()
 
-PDF_STORAGE_PATH = 'document_store/pdfs/'
-EMBEDDING_MODEL = OllamaEmbeddings(model="deepseek-r1:1.5b")
-CHROMA_PERSIST_DIR = "./chroma_db"
+# Check if Google API key is available
+if os.environ.get("GOOGLE_API_KEY") is None:
+    st.error("GOOGLE_API_KEY not found in environment variables. Please ensure it's set in the .env file.")
+    st.stop()
 
-if "processed_docs" not in st.session_state:
-    st.session_state.processed_docs = False
+# Initialize Sentence Transformer embeddings
+embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 
-def save_uploaded_file(uploaded_file):
-    file_path = PDF_STORAGE_PATH + uploaded_file.name
-    with open(file_path, "wb") as file:
-        file.write(uploaded_file.getbuffer())
-    return file_path
+def main():
+    st.set_page_config(page_title="Generate Embeddings for CSV", page_icon=":books:")
+    st.title("Generate Embeddings for CSV Data")
 
-def load_pdf_documents(file_path):
-    document_loader = PDFPlumberLoader(file_path)
-    return document_loader.load()
+    csv_file_path = "C:\\src\\Wateen\\ai-business-matcher\\ai_tools_detailed.csv"
+    persist_directory = "./chroma_db_wateen"
+    collection_name = "ai_tools_wateen"
 
-def chunk_documents(docs):
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len,
-        is_separator_regex=False,
-    )
-    return text_splitter.split_documents(docs)
+    st.info(f"Reading data from: {csv_file_path}")
+    st.info(f"Embeddings will be stored in: {persist_directory} (Collection: {collection_name})")
 
-class OllamaChromaEmbedder:
-    def __init__(self, ollama_embeddings: OllamaEmbeddings):
-        self.embeddings = ollama_embeddings
-        
-    def __call__(self, input):
-        return self.embeddings.embed_documents(input)
+    if st.button("Generate Embeddings"):
+        if not os.path.exists(csv_file_path):
+            st.error(f"CSV file not found at: {csv_file_path}")
+            return
 
-def index_documents(document_chunks):
-    Chroma.from_documents(
-        documents=document_chunks,
-        embedding=EMBEDDING_MODEL,
-        persist_directory=CHROMA_PERSIST_DIR,
-        collection_name="documents"
-    )
+        with st.spinner(f"Loading and processing {os.path.basename(csv_file_path)}..."):
+            try:
+                # Load the CSV file
+                # Specify the column containing the text data if it's not the first one
+                # Example: loader = CSVLoader(file_path=csv_file_path, csv_args={'delimiter': ','}, source_column='description')
+                loader = CSVLoader(file_path=csv_file_path, encoding='utf-8') # Adjust encoding if needed
+                documents = loader.load()
 
-# UI Configuration
-st.title("📘 Task")
-st.markdown("### PDF Embedding Generator")
-st.markdown("---")
+                if not documents:
+                    st.warning("No documents were loaded from the CSV. Check the file content and format.")
+                    return
 
-# File Upload Section
-uploaded_pdf = st.file_uploader(
-    "Upload PDF Document",
-    type="pdf",
-    help="Select a PDF document to generate embeddings",
-    accept_multiple_files=False
-)
+                # Split documents into chunks
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                texts = text_splitter.split_documents(documents)
 
-if uploaded_pdf and not st.session_state.processed_docs:
-    saved_path = save_uploaded_file(uploaded_pdf)
-    raw_docs = load_pdf_documents(saved_path)
-    processed_chunks = chunk_documents(raw_docs)
-    
-    # Store documents in ChromaDB
-    index_documents(processed_chunks)
-    
-    st.session_state.processed_docs = True
-    st.success("✅ Document processed successfully! Embeddings created and stored.")
+                if not texts:
+                    st.warning("No text chunks were generated after splitting. Check document content.")
+                    return
+
+                # Create Chroma vector store
+                st.write(f"Creating embeddings for {len(texts)} text chunks...")
+                vectordb = Chroma.from_documents(
+                    documents=texts,
+                    embedding=embeddings,
+                    persist_directory=persist_directory,
+                    collection_name=collection_name
+                )
+                vectordb.persist() # Ensure data is saved
+                st.success(f"Embeddings generated and saved to {persist_directory}!")
+
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+                st.exception(e) # Show full traceback
+
+if __name__ == '__main__':
+    main()
