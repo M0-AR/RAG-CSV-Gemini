@@ -45,7 +45,7 @@ def load_components():
             embedding_function=embeddings,
             collection_name=COLLECTION_NAME
         )
-        retriever = vectorstore.as_retriever(search_kwargs={'k': 3000}) # Retrieve top 1000 relevant chunks
+        retriever = vectorstore.as_retriever(search_kwargs={'k': 100}) # Retrieve top 100 relevant chunks
 
         # LLM (Google Gemini)
         llm = ChatGoogleGenerativeAI(model=google_api_model, google_api_key=google_api_key, temperature=0.2)
