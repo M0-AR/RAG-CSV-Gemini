@@ -1,32 +1,36 @@
 import streamlit as st
 import os
-from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
+from supabase import create_client
+from langchain_community.vectorstores.supabase import SupabaseVectorStore
 
 # Load environment variables
 load_dotenv()
 
 google_api_key = os.environ.get("GOOGLE_API_KEY")
 google_api_model = os.environ.get("GOOGLE_API_MODEL", "gemini-1.5-flash") # Default model if not set
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_TABLE = os.environ.get("SUPABASE_TABLE", "ai_tools")
 
 if not google_api_key:
     st.error("GOOGLE_API_KEY not found. Please ensure it's set in the .env file.")
     st.stop()
 
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+    st.stop()
+
 # --- Configuration ---
-VECTOR_DB_PERSIST_DIR = "./chroma_db_wateen"
-COLLECTION_NAME = "ai_tools_wateen"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 
-# Check if vector store exists
-if not os.path.exists(VECTOR_DB_PERSIST_DIR):
-    st.error(f"Vector store not found at {VECTOR_DB_PERSIST_DIR}. Please run embeddings.py first to generate embeddings.")
-    st.stop()
+# Initialize Supabase client
+supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Initialize Components ---
 st.set_page_config(page_title="Chat with AI Tools CSV Data", page_icon=":robot_face:")
@@ -39,16 +43,17 @@ def load_components():
         # Embeddings
         embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL_NAME)
 
-        # Vector Store (load existing)
-        vectorstore = Chroma(
-            persist_directory=VECTOR_DB_PERSIST_DIR,
-            embedding_function=embeddings,
-            collection_name=COLLECTION_NAME
+        # Vector Store (Supabase)
+        vectorstore = SupabaseVectorStore(
+            client=supabase_client,
+            embedding=embeddings,
+            table_name=SUPABASE_TABLE
         )
-        retriever = vectorstore.as_retriever(search_kwargs={'k': 3000}) # Retrieve top 1000 relevant chunks
+        
+        retriever = vectorstore.as_retriever(search_kwargs={'k': 3300}) # Retrieve top 1000 relevant chunks
 
         # LLM (Google Gemini)
-        llm = ChatGoogleGenerativeAI(model=google_api_model, google_api_key=google_api_key, temperature=0.2)
+        llm = ChatGoogleGenerativeAI(model=google_api_model, google_api_key=google_api_key, temperature=0.1)
 
         # Prompt Template
         template = """
@@ -65,6 +70,7 @@ Context: {context}
 
 Answer:
 """
+
         prompt = ChatPromptTemplate.from_template(template)
 
         return retriever, llm, prompt

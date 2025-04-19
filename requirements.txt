@@ -9,3 +9,4 @@ huggingface-hub==0.30.2
 pandas==2.2.1
 python-dotenv==1.0.0
 # pypdf - Removed as we are loading from CSV
+supabase>=2.15.0

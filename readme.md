@@ -6,7 +6,7 @@ A Retrieval-Augmented Generation (RAG) chatbot built using:
 
 - **Streamlit** for the interactive UI
 - **LangChain** for data loading, embeddings, and retrieval logic
-- **ChromaDB** as a persistent vector store
+- **Supabase** as a persistent vector store
 - **Google Gemini LLM** via `langchain-google-genai` for high-quality responses
 - **SentenceTransformerEmbeddings** via `langchain_community` for embedding generation
 
@@ -15,7 +15,7 @@ This application ingests AI tools data from a CSV file, generates embeddings, an
 ## Features
 
 - **Embeddings Generation:** Load CSV data, split into text chunks, and compute embeddings.
-- **Vector Store Persistence:** Store and retrieve embeddings in ChromaDB (`./chroma_db_wateen`).
+- **Vector Store Persistence:** Store and retrieve embeddings in Supabase vector store.
 - **Interactive Chat Interface:** Streamlit-based chat app (`app.py`) for natural-language queries.
 - **Google Gemini Integration:** Leverage the Gemini LLM for generating concise, informed answers.
 - **Configurable Retrieval:** Adjustable `k` (number of retrieved chunks) and LLM `temperature` settings.
@@ -61,18 +61,69 @@ This application ingests AI tools data from a CSV file, generates embeddings, an
    pip install --force-reinstall -r requirements.txt
    ```
 
+## Supabase PostgreSQL Setup
+
+Ensure pgvector is installed and your table/function are configured:
+```sql
+-- install pgvector if you haven’t
+create extension if not exists vector;
+
+-- create or replace your table (id,content,embedding,metadata) first
+create table if not exists ai_tools (
+  id text primary key,
+  content text,
+  embedding vector(384),
+  metadata jsonb
+);
+
+-- Create simplified match_documents function
+CREATE OR REPLACE FUNCTION public.match_documents(
+    query_embedding vector(384),
+    match_count int DEFAULT 10
+)
+RETURNS TABLE (
+    id text,
+    content text,
+    metadata jsonb,
+    similarity float
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        at.id,
+        at.content,
+        at.metadata,
+        1 - (at.embedding <=> query_embedding) as similarity
+    FROM
+        public.ai_tools AS at
+    ORDER BY
+        at.embedding <=> query_embedding
+    LIMIT
+        match_count;
+END;
+$$;
+
+-- Force PostgREST cache reload
+NOTIFY pgrst, 'reload schema';
+-- If notify doesn't work:
+-- select pg_terminate_backend(pid) from pg_stat_activity where datname = 'postgres' and application_name = 'postgrest';
+```
+
 ## Usage
 
 ### Generate Embeddings
 
-Run the embedding script to index your CSV dataset into ChromaDB:
+Run the embedding script to index your CSV dataset into Supabase:
 
 ```bash
-streamlit run embeddings.py
+python supabase_embeddings.py
 ```
 
-- **Upload CSV Path:** Configured in `embeddings.py` (default: `ai_tools_detailed.csv`).
-- **Output:** Embeddings persisted to `./chroma_db_wateen`.
+- **Upload CSV Path:** Configured in `supabase_embeddings.py` (default: `ai_tools_detailed.csv`).
+- **Output:** Embeddings persisted to Supabase vector store.
 
 ### Start the Chat Application
 
@@ -91,9 +142,8 @@ streamlit run app.py
 RAG-CSV-Gemini/
 ├── .env                 # Environment variables (Google API keys)
 ├── requirements.txt     # Pinned dependencies for compatibility
-├── embeddings.py        # Script to generate and persist embeddings
+├── supabase_embeddings.py        # Script to generate and persist embeddings
 ├── app.py               # Streamlit chat application
-├── chroma_db_wateen/    # Persisted ChromaDB vector store
 └── README.md            # Project documentation
 ```
 
@@ -102,7 +152,7 @@ RAG-CSV-Gemini/
 Key libraries and pinned versions (see `requirements.txt`):
 
 - streamlit==1.29.0
-- chromadb==0.6.3
+- supabase==0.6.3
 - langchain==0.1.16
 - langchain-core==0.1.52
 - langchain_community>=0.0.32,<0.1.0
@@ -123,7 +173,7 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 ## Acknowledgments
 
 - [LangChain](https://github.com/langchain/langchain)
-- [ChromaDB](https://github.com/chroma-core/chroma)
+- [Supabase](https://github.com/supabase/supabase)
 - [Google Gemini](https://developers.generativeai.google/)
 - [Streamlit](https://streamlit.io)
 
